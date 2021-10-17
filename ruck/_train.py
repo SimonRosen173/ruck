@@ -24,12 +24,11 @@
 
 import itertools
 import logging
-from typing import Generic
-from typing import Iterator
-from typing import Tuple
-from typing import TypeVar
+import pickle
+from typing import Generic, Optional, Iterator, Tuple, TypeVar
 
 import numpy as np
+import ray
 from tqdm import tqdm
 
 from ruck._history import HallOfFame
@@ -122,11 +121,17 @@ class Trainer(Generic[T]):
         progress: bool = True,
         history_n_best: int = 5,
         offspring_generator=yield_population_steps,
+        is_saving: bool = False,
+        file_suffix: Optional[str] = None,
+        save_interval = 1
     ):
         self._generations = generations
         self._progress = progress
         self._history_n_best = history_n_best
         self._offspring_generator = offspring_generator
+        self._file_suffix = file_suffix
+        self._is_saving = is_saving
+        self._save_interval = save_interval
         assert self._history_n_best > 0
 
     def fit(self, module: EaModule[T]) -> Tuple[Population[T], Logbook[T], HallOfFame[T]]:
@@ -134,10 +139,16 @@ class Trainer(Generic[T]):
         # history trackers
         logbook = Logbook('gen', 'evals', **module.get_stats_groups())
         halloffame = HallOfFame(n_best=self._history_n_best, maximize=True)
+
         # progress bar and training loop
         with tqdm(total=self._generations, desc='generation', disable=not self._progress, ncols=120) as p:
             for gen, population, offspring, evals in itertools.islice(self._offspring_generator(module), self._generations):
                 # update statistics with new population
+                if self._is_saving and gen % self._save_interval == 0:
+                    with open(f"{self._file_suffix}_{gen}.pkl", "wb") as f:
+                        vals = [ray.get(member.value) for member in population]
+                        pickle.dump(vals, f)
+
                 halloffame.update(offspring)
                 stats = logbook.record(population, gen=gen, evals=evals)
                 # update progress bar
